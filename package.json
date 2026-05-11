@@ -4,7 +4,7 @@
   "description": "Generate a safe zsh command center from any package.json scripts list.",
   "type": "module",
   "bin": {
-    "repo-zsh-helper": "./bin/repo-zsh-helper.js"
+    "repo-zsh-helper": "bin/repo-zsh-helper.js"
   },
   "preferGlobal": false,
   "scripts": {
