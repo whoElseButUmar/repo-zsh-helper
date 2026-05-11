@@ -1,0 +1,41 @@
+{
+  "name": "repo-zsh-helper",
+  "version": "0.1.0",
+  "description": "Generate a safe zsh command center from any package.json scripts list.",
+  "type": "module",
+  "bin": {
+    "repo-zsh-helper": "./bin/repo-zsh-helper.js"
+  },
+  "preferGlobal": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && chmod +x bin/repo-zsh-helper.js",
+    "build:test": "tsc -p tsconfig.test.json",
+    "check": "tsc --noEmit && npm run build && node --check bin/repo-zsh-helper.js",
+    "test": "npm run build && npm run build:test && node --test .tmp/test/**/*.test.js",
+    "prepack": "npm run check && npm test",
+    "smoke": "node bin/repo-zsh-helper.js --repo . --keyword demo --zshrc .tmp/smoke.zshrc --yes"
+  },
+  "keywords": [
+    "zsh",
+    "cli",
+    "npx",
+    "package-json",
+    "pnpm",
+    "developer-tools",
+    "aliases"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "LICENSE",
+    "README.md"
+  ],
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}
