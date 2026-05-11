@@ -1,6 +1,6 @@
 {
   "name": "repo-zsh-helper",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Generate a safe zsh command center from any package.json scripts list.",
   "type": "module",
   "bin": {
