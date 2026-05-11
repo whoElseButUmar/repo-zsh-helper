@@ -5,7 +5,7 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
-const VERSION = "0.1.2";
+const VERSION = "0.1.3";
 const PACKAGE_MANAGERS = ["npm", "pnpm", "yarn", "bun"] as const;
 
 type PackageManager = typeof PACKAGE_MANAGERS[number];
@@ -496,7 +496,7 @@ async function main(): Promise<void> {
 
     process.stdout.write(`\nRemoved managed block for ${shellFunctionName(args.keyword)}() from ${zshrcPath}\n`);
     process.stdout.write(`Backup: ${backupPath}\n`);
-    process.stdout.write("Run: source ~/.zshrc\n");
+    process.stdout.write(`Run: unfunction ${shellFunctionName(args.keyword)} 2>/dev/null; source ~/.zshrc\n`);
     return;
   }
 

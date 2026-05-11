@@ -65,7 +65,7 @@ Remove an installed helper:
 
 ```sh
 npx repo-zsh-helper --keyword app --remove --yes
-source ~/.zshrc
+unfunction app 2>/dev/null; source ~/.zshrc
 ```
 
 ## What It Changes
@@ -91,6 +91,8 @@ app() {
 If you run it again with the same keyword, it replaces only that managed block. It does not overwrite your whole `.zshrc`.
 
 If you remove it with `--remove`, it deletes only the managed block for that keyword. It still creates a backup first.
+
+If the command still works in the same terminal after removal, that shell has the old function loaded in memory. Run `unfunction <keyword> 2>/dev/null; source ~/.zshrc` or open a new terminal.
 
 ## Safety Notes
 

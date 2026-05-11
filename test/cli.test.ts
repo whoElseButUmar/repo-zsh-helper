@@ -90,6 +90,7 @@ test("remove deletes only the managed block and creates a backup", () => {
   assert.equal(install.status, 0, install.stderr);
   assert.equal(remove.status, 0, remove.stderr);
   assert.match(remove.stdout, /Removed managed block/);
+  assert.match(remove.stdout, /unfunction app 2>\/dev\/null; source ~\/\.zshrc/);
 
   const output = fs.readFileSync(zshrc, "utf8");
   assert.match(output, /^export KEEP_ME=1/m);

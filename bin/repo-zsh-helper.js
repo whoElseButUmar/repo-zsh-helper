@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-const VERSION = "0.1.2";
+const VERSION = "0.1.3";
 const PACKAGE_MANAGERS = ["npm", "pnpm", "yarn", "bun"];
 function usage() {
     return `repo-zsh-helper ${VERSION}
@@ -431,7 +431,7 @@ async function main() {
         fs.writeFileSync(zshrcPath, removed.content ? `${removed.content}\n` : "", { mode: 0o600 });
         process.stdout.write(`\nRemoved managed block for ${shellFunctionName(args.keyword)}() from ${zshrcPath}\n`);
         process.stdout.write(`Backup: ${backupPath}\n`);
-        process.stdout.write("Run: source ~/.zshrc\n");
+        process.stdout.write(`Run: unfunction ${shellFunctionName(args.keyword)} 2>/dev/null; source ~/.zshrc\n`);
         return;
     }
     const repoPath = fs.realpathSync(path.resolve(expandHome(args.repo || ".")));
