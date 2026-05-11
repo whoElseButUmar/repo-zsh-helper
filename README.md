@@ -9,7 +9,7 @@ npx repo-zsh-helper
 It asks for:
 
 - the repo path, defaulting to `.`
-- the keyword you want, like `hub`, `waker`, or `arch`
+- the keyword you want, like `app`, `waker`, or `arch`
 
 Then it installs a function into `~/.zshrc`, so your package scripts become easy to discover and run:
 
@@ -39,10 +39,12 @@ npx repo-zsh-helper
 source ~/.zshrc
 ```
 
+The repo-path prompt shows nearby package repos when it can. Press `Tab` while typing that path to autocomplete directories.
+
 With flags:
 
 ```sh
-npx repo-zsh-helper --repo ~/workspaces-hub --keyword hub
+npx repo-zsh-helper --repo ~/my-app --keyword app
 source ~/.zshrc
 ```
 
@@ -65,11 +67,11 @@ Before writing, it creates a backup like:
 It writes a managed block with markers:
 
 ```zsh
-# >>> repo-zsh-helper:hub >>>
-hub() {
+# >>> repo-zsh-helper:app >>>
+app() {
   ...
 }
-# <<< repo-zsh-helper:hub <<<
+# <<< repo-zsh-helper:app <<<
 ```
 
 If you run it again with the same keyword, it replaces only that managed block. It does not overwrite your whole `.zshrc`.
@@ -89,7 +91,7 @@ The CLI is intentionally boring:
 The generated function runs commands only when you call it later. For example:
 
 ```sh
-hub check
+app check
 ```
 
 runs:

@@ -5,7 +5,7 @@ import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 const PACKAGE_MANAGERS = ["npm", "pnpm", "yarn", "bun"] as const;
 
 type PackageManager = typeof PACKAGE_MANAGERS[number];
@@ -32,6 +32,8 @@ type GeneratedBlock = {
   endMarker: string;
 };
 
+type CompletionResult = [string[], string];
+
 function usage(): string {
   return `repo-zsh-helper ${VERSION}
 
@@ -39,7 +41,7 @@ Generate a zsh command center from a repo's package.json scripts.
 
 Usage:
   repo-zsh-helper
-  repo-zsh-helper --repo . --keyword hub
+  repo-zsh-helper --repo . --keyword app
 
 Options:
   --repo <path>       Repo path. Defaults to ".".
@@ -88,6 +90,85 @@ function expandHome(value: string): string {
   if (value === "~") return os.homedir();
   if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
   return value;
+}
+
+function isDirectoryPath(candidate: string): boolean {
+  try {
+    return fs.statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function isRepoPath(candidate: string): boolean {
+  return isDirectoryPath(candidate) && fs.existsSync(path.join(candidate, "package.json"));
+}
+
+function formatRepoSuggestion(candidate: string, cwd = process.cwd()): string {
+  const relative = path.relative(cwd, candidate);
+  if (!relative) return ".";
+  if (relative.startsWith("..")) return candidate;
+  return `.${path.sep}${relative}`;
+}
+
+function repoPathSuggestions(cwd = process.cwd()): string[] {
+  const suggestions: string[] = [];
+  const seen = new Set<string>();
+
+  const add = (candidate: string) => {
+    const resolved = path.resolve(candidate);
+    if (seen.has(resolved) || !isRepoPath(resolved)) return;
+    seen.add(resolved);
+    suggestions.push(formatRepoSuggestion(resolved, cwd));
+  };
+
+  add(cwd);
+
+  for (const parent of [cwd, path.join(cwd, "apps"), path.join(cwd, "packages")]) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(parent, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (suggestions.length >= 6) return suggestions;
+      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+      const candidate = path.join(parent, entry.name);
+      if (entry.isDirectory() || isDirectoryPath(candidate)) add(candidate);
+    }
+  }
+
+  return suggestions;
+}
+
+function directoryPathCompleter(line: string): CompletionResult {
+  const typed = line || "";
+  const endsWithSeparator = typed.endsWith(path.sep);
+  const rawDir = typed && !endsWithSeparator ? path.dirname(typed) : typed;
+  const typedBase = typed && !endsWithSeparator ? path.basename(typed) : "";
+  const displayDir = rawDir && rawDir !== "." ? `${rawDir.replace(/\/$/, "")}/` : "";
+  const lookupDir = path.resolve(expandHome(rawDir || "."));
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(lookupDir, { withFileTypes: true });
+  } catch {
+    return [[], line];
+  }
+
+  const matches = entries
+    .filter((entry) => {
+      if (!typedBase && entry.name.startsWith(".")) return false;
+      if (!entry.name.startsWith(typedBase)) return false;
+      const candidate = path.join(lookupDir, entry.name);
+      return entry.isDirectory() || isDirectoryPath(candidate);
+    })
+    .map((entry) => `${displayDir}${entry.name}/`)
+    .sort();
+
+  return [matches.length > 0 ? matches : [], line];
 }
 
 function validateKeyword(keyword: string | undefined): asserts keyword is string {
@@ -158,6 +239,17 @@ function packageManagerCommand(packageManager: PackageManager): string {
   return packageManager;
 }
 
+function asciiBanner(keyword: string): string {
+  return [
+    "    ____  _____ ____   ___     ______ ____  _   _",
+    "   |  _ \\| ____|  _ \\ / _ \\   |__  / / ___|| | | |",
+    "   | |_) |  _| | |_) | | | |    / /  \\___ \\| |_| |",
+    "   |  _ <| |___|  __/| |_| |   / /_   ___) |  _  |",
+    "   |_| \\_\\_____|_|    \\___/   /____| |____/|_| |_|",
+    `                ${keyword.toUpperCase()} COMMAND CENTER`
+  ].join("\n");
+}
+
 function displayLabel(script: string): string {
   return script
     .replace(/[:_-]+/g, " ")
@@ -211,7 +303,7 @@ function generateBlock({
 }): GeneratedBlock {
   const startMarker = `# >>> repo-zsh-helper:${keyword} >>>`;
   const endMarker = `# <<< repo-zsh-helper:${keyword} <<<`;
-  const title = `${keyword.toUpperCase()} COMMAND CENTER`;
+  const banner = asciiBanner(keyword);
   const groups = new Map();
 
   for (const script of scripts) {
@@ -244,7 +336,7 @@ function generateBlock({
   out += `    ""|help)\n`;
   out += `      print -P "%F{cyan}"\n`;
   out += `      cat <<'EOF'\n`;
-  out += `    ${title}\n`;
+  out += `${banner}\n`;
   out += `EOF\n`;
   out += `      print -P "%f%F{244}repo:%f $repo"\n`;
   out += `      print -P "%F{244}runner:%f ${command}"\n`;
@@ -310,14 +402,19 @@ function replaceManagedBlock(existing: string, { block, startMarker, endMarker }
 }
 
 async function promptIfMissing(args: CliArgs): Promise<CliArgs> {
-  const rl = readline.createInterface({ input, output });
+  const rl = readline.createInterface({ input, output, completer: directoryPathCompleter });
   try {
     if (!args.repo) {
+      const suggestions = repoPathSuggestions();
+      if (suggestions.length > 0) {
+        output.write(`Repo suggestions: ${suggestions.join(", ")}\n`);
+      }
+      output.write("Tip: press Tab to autocomplete paths.\n");
       const answer = await rl.question("Repo path [.]: ");
       args.repo = answer.trim() || ".";
     }
     if (!args.keyword) {
-      const answer = await rl.question("Keyword for shell command, e.g. hub: ");
+      const answer = await rl.question("Keyword for shell command, e.g. app: ");
       args.keyword = answer.trim();
     }
     if (!args.yes && !args.dryRun) {

@@ -48,12 +48,14 @@ function runCli(
 test("dry-run prints a managed zsh block and does not write zshrc", () => {
   const { repo, zshrc } = makeFixture({ packageManager: "pnpm@10.0.0" });
 
-  const result = runCli(["--repo", repo, "--keyword", "hub", "--zshrc", zshrc, "--dry-run"]);
+  const result = runCli(["--repo", repo, "--keyword", "app", "--zshrc", zshrc, "--dry-run"]);
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /# >>> repo-zsh-helper:hub >>>/);
+  assert.match(result.stdout, /# >>> repo-zsh-helper:app >>>/);
+  assert.match(result.stdout, /____  _____ ____   ___/);
+  assert.match(result.stdout, /APP COMMAND CENTER/);
   assert.match(result.stdout, /local package_manager="pnpm"/);
-  assert.match(result.stdout, /_hub_run_script "check:fast" "\$\{@:2\}"/);
+  assert.match(result.stdout, /_app_run_script "check:fast" "\$\{@:2\}"/);
   assert.equal(fs.existsSync(zshrc), false);
 });
 
@@ -61,16 +63,16 @@ test("install preserves unrelated zshrc content and replaces only its own block"
   const { repo, root, zshrc } = makeFixture({ packageManager: "npm@11.0.0" });
   fs.writeFileSync(zshrc, "export KEEP_ME=1\n");
 
-  const first = runCli(["--repo", repo, "--keyword", "hub", "--zshrc", zshrc, "--yes"]);
-  const second = runCli(["--repo", repo, "--keyword", "hub", "--zshrc", zshrc, "--yes"]);
+  const first = runCli(["--repo", repo, "--keyword", "app", "--zshrc", zshrc, "--yes"]);
+  const second = runCli(["--repo", repo, "--keyword", "app", "--zshrc", zshrc, "--yes"]);
 
   assert.equal(first.status, 0, first.stderr);
   assert.equal(second.status, 0, second.stderr);
 
   const output = fs.readFileSync(zshrc, "utf8");
   assert.match(output, /^export KEEP_ME=1/m);
-  assert.equal((output.match(/# >>> repo-zsh-helper:hub >>>/g) || []).length, 1);
-  assert.equal((output.match(/# <<< repo-zsh-helper:hub <<</g) || []).length, 1);
+  assert.equal((output.match(/# >>> repo-zsh-helper:app >>>/g) || []).length, 1);
+  assert.equal((output.match(/# <<< repo-zsh-helper:app <<</g) || []).length, 1);
   assert.match(output, /local package_manager="npm"/);
   assert.match(output, /npm run "\$@"/);
 
@@ -95,12 +97,25 @@ test("missing option values fail clearly", () => {
   assert.match(result.stderr, /--repo requires a value/);
 });
 
+test("interactive repo prompt shows suggestions and tab-completion hint", () => {
+  const { repo } = makeFixture();
+
+  const result = runCli([], {
+    cwd: repo,
+    input: "\napp\nn\n"
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Repo suggestions: \./);
+  assert.match(result.stdout, /press Tab to autocomplete paths/);
+});
+
 test("malformed existing managed block fails without rewriting zshrc", () => {
   const { repo, zshrc } = makeFixture();
-  const original = "export KEEP_ME=1\n# >>> repo-zsh-helper:hub >>>\n";
+  const original = "export KEEP_ME=1\n# >>> repo-zsh-helper:app >>>\n";
   fs.writeFileSync(zshrc, original);
 
-  const result = runCli(["--repo", repo, "--keyword", "hub", "--zshrc", zshrc, "--yes"]);
+  const result = runCli(["--repo", repo, "--keyword", "app", "--zshrc", zshrc, "--yes"]);
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /without a closer/);
