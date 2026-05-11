@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-const VERSION = "0.1.1";
+const VERSION = "0.1.2";
 const PACKAGE_MANAGERS = ["npm", "pnpm", "yarn", "bun"];
 function usage() {
     return `repo-zsh-helper ${VERSION}
@@ -21,6 +21,7 @@ Options:
   --zshrc <path>      Target zshrc path. Defaults to ~/.zshrc.
   --yes              Skip confirmation prompt.
   --dry-run          Print generated block without writing.
+  --remove           Remove this helper's managed block for the keyword.
   --help             Show this help.
   --version          Show version.
 `;
@@ -32,6 +33,7 @@ function parseArgs(argv) {
         zshrc: undefined,
         yes: false,
         dryRun: false,
+        remove: false,
         help: false,
         version: false
     };
@@ -47,6 +49,8 @@ function parseArgs(argv) {
             args.yes = true;
         else if (arg === "--dry-run")
             args.dryRun = true;
+        else if (arg === "--remove" || arg === "--uninstall")
+            args.remove = true;
         else if (arg === "--help" || arg === "-h")
             args.help = true;
         else if (arg === "--version" || arg === "-v")
@@ -262,9 +266,14 @@ function makeShortcutMap(scripts) {
     }
     return shortcuts;
 }
+function managedMarkers(keyword) {
+    return {
+        startMarker: `# >>> repo-zsh-helper:${keyword} >>>`,
+        endMarker: `# <<< repo-zsh-helper:${keyword} <<<`
+    };
+}
 function generateBlock({ keyword, functionName, packageManager, repoPath, scripts }) {
-    const startMarker = `# >>> repo-zsh-helper:${keyword} >>>`;
-    const endMarker = `# <<< repo-zsh-helper:${keyword} <<<`;
+    const { startMarker, endMarker } = managedMarkers(keyword);
     const banner = asciiBanner(keyword);
     const groups = new Map();
     for (const script of scripts) {
@@ -330,15 +339,17 @@ function generateBlock({ keyword, functionName, packageManager, repoPath, script
     out += `${endMarker}\n`;
     return { block: out, startMarker, endMarker };
 }
-function replaceManagedBlock(existing, { block, startMarker, endMarker }) {
+function removeManagedBlock(existing, { startMarker, endMarker }) {
     const lines = existing.split(/\n/);
     const kept = [];
     let skip = false;
+    let found = false;
     for (const line of lines) {
         if (line === startMarker) {
             if (skip)
                 throw new Error(`Found nested managed block marker: ${startMarker}`);
             skip = true;
+            found = true;
             continue;
         }
         if (line === endMarker) {
@@ -352,13 +363,17 @@ function replaceManagedBlock(existing, { block, startMarker, endMarker }) {
     }
     if (skip)
         throw new Error(`Found opening managed block marker without a closer: ${startMarker}`);
-    const base = kept.join("\n").replace(/\n*$/, "");
-    return `${base}\n\n${block}`;
+    return { content: kept.join("\n").replace(/\n*$/, ""), found };
+}
+function replaceManagedBlock(existing, generated) {
+    const removed = removeManagedBlock(existing, generated);
+    const base = removed.content.replace(/\n*$/, "");
+    return base ? `${base}\n\n${generated.block}` : generated.block;
 }
 async function promptIfMissing(args) {
     const rl = readline.createInterface({ input, output, completer: directoryPathCompleter });
     try {
-        if (!args.repo) {
+        if (!args.remove && !args.repo) {
             const suggestions = repoPathSuggestions();
             if (suggestions.length > 0) {
                 output.write(`Repo suggestions: ${suggestions.join(", ")}\n`);
@@ -372,7 +387,8 @@ async function promptIfMissing(args) {
             args.keyword = answer.trim();
         }
         if (!args.yes && !args.dryRun) {
-            const answer = await rl.question("Install into ~/.zshrc? [y/N]: ");
+            const action = args.remove ? "Remove from" : "Install into";
+            const answer = await rl.question(`${action} ~/.zshrc? [y/N]: `);
             args.confirmed = /^y(es)?$/i.test(answer.trim());
         }
     }
@@ -397,6 +413,27 @@ async function main() {
         return;
     }
     validateKeyword(args.keyword);
+    const zshrcPath = path.resolve(expandHome(args.zshrc || path.join(os.homedir(), ".zshrc")));
+    if (args.remove) {
+        const existing = fs.existsSync(zshrcPath) ? fs.readFileSync(zshrcPath, "utf8") : "";
+        const removed = removeManagedBlock(existing, managedMarkers(args.keyword));
+        if (!removed.found) {
+            process.stdout.write(`No managed block found for keyword "${args.keyword}" in ${zshrcPath}.\n`);
+            process.stdout.write("No changes made.\n");
+            return;
+        }
+        if (args.dryRun) {
+            process.stdout.write(`Would remove managed block for keyword "${args.keyword}" from ${zshrcPath}.\n`);
+            return;
+        }
+        const backupPath = uniqueBackupPath(zshrcPath);
+        fs.writeFileSync(backupPath, existing, { mode: 0o600 });
+        fs.writeFileSync(zshrcPath, removed.content ? `${removed.content}\n` : "", { mode: 0o600 });
+        process.stdout.write(`\nRemoved managed block for ${shellFunctionName(args.keyword)}() from ${zshrcPath}\n`);
+        process.stdout.write(`Backup: ${backupPath}\n`);
+        process.stdout.write("Run: source ~/.zshrc\n");
+        return;
+    }
     const repoPath = fs.realpathSync(path.resolve(expandHome(args.repo || ".")));
     const packagePath = path.join(repoPath, "package.json");
     if (!fs.existsSync(packagePath))
@@ -417,7 +454,6 @@ async function main() {
         process.stdout.write(generated.block);
         return;
     }
-    const zshrcPath = path.resolve(expandHome(args.zshrc || path.join(os.homedir(), ".zshrc")));
     const existing = fs.existsSync(zshrcPath) ? fs.readFileSync(zshrcPath, "utf8") : "";
     const backupPath = uniqueBackupPath(zshrcPath);
     fs.mkdirSync(path.dirname(zshrcPath), { recursive: true });

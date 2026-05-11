@@ -80,6 +80,56 @@ test("install preserves unrelated zshrc content and replaces only its own block"
   assert.equal(backups.length, 2);
 });
 
+test("remove deletes only the managed block and creates a backup", () => {
+  const { repo, root, zshrc } = makeFixture({ packageManager: "npm@11.0.0" });
+  fs.writeFileSync(zshrc, "export KEEP_ME=1\n");
+
+  const install = runCli(["--repo", repo, "--keyword", "app", "--zshrc", zshrc, "--yes"]);
+  const remove = runCli(["--keyword", "app", "--zshrc", zshrc, "--remove", "--yes"]);
+
+  assert.equal(install.status, 0, install.stderr);
+  assert.equal(remove.status, 0, remove.stderr);
+  assert.match(remove.stdout, /Removed managed block/);
+
+  const output = fs.readFileSync(zshrc, "utf8");
+  assert.match(output, /^export KEEP_ME=1/m);
+  assert.doesNotMatch(output, /repo-zsh-helper:app/);
+
+  const backups = fs.readdirSync(root).filter((name) => name.startsWith(".zshrc.backup-"));
+  assert.equal(backups.length, 2);
+});
+
+test("remove with no matching block does not rewrite or create a backup", () => {
+  const { root, zshrc } = makeFixture();
+  const original = "export KEEP_ME=1\n";
+  fs.writeFileSync(zshrc, original);
+
+  const result = runCli(["--keyword", "missing", "--zshrc", zshrc, "--remove", "--yes"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /No managed block found/);
+  assert.equal(fs.readFileSync(zshrc, "utf8"), original);
+
+  const backups = fs.readdirSync(root).filter((name) => name.startsWith(".zshrc.backup-"));
+  assert.equal(backups.length, 0);
+});
+
+test("remove dry-run does not rewrite zshrc or create a backup", () => {
+  const { repo, root, zshrc } = makeFixture();
+  const install = runCli(["--repo", repo, "--keyword", "app", "--zshrc", zshrc, "--yes"]);
+  assert.equal(install.status, 0, install.stderr);
+
+  const before = fs.readFileSync(zshrc, "utf8");
+  const result = runCli(["--keyword", "app", "--zshrc", zshrc, "--remove", "--dry-run"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Would remove managed block/);
+  assert.equal(fs.readFileSync(zshrc, "utf8"), before);
+
+  const backups = fs.readdirSync(root).filter((name) => name.startsWith(".zshrc.backup-"));
+  assert.equal(backups.length, 1);
+});
+
 test("generated block is valid zsh syntax", () => {
   const { repo, zshrc } = makeFixture({ packageManager: "bun@1.2.0" });
 
@@ -95,6 +145,14 @@ test("missing option values fail clearly", () => {
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /--repo requires a value/);
+});
+
+test("remove does not require a repo path", () => {
+  const { zshrc } = makeFixture();
+  const result = runCli(["--remove", "--keyword", "app", "--zshrc", zshrc, "--yes"]);
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /No managed block found/);
 });
 
 test("interactive repo prompt shows suggestions and tab-completion hint", () => {

@@ -54,6 +54,20 @@ Dry run:
 npx repo-zsh-helper --repo . --keyword app --dry-run
 ```
 
+Update an existing helper:
+
+```sh
+npx repo-zsh-helper --repo . --keyword app --yes
+source ~/.zshrc
+```
+
+Remove an installed helper:
+
+```sh
+npx repo-zsh-helper --keyword app --remove --yes
+source ~/.zshrc
+```
+
 ## What It Changes
 
 `repo-zsh-helper` only writes to your `~/.zshrc` by default.
@@ -75,6 +89,8 @@ app() {
 ```
 
 If you run it again with the same keyword, it replaces only that managed block. It does not overwrite your whole `.zshrc`.
+
+If you remove it with `--remove`, it deletes only the managed block for that keyword. It still creates a backup first.
 
 ## Safety Notes
 
@@ -110,6 +126,7 @@ inside the repo you selected.
 --zshrc <path>      Target zshrc path. Defaults to ~/.zshrc.
 --yes              Skip confirmation prompt.
 --dry-run          Print generated block without writing.
+--remove           Remove this helper's managed block for the keyword.
 --help             Show help.
 --version          Show version.
 ```
