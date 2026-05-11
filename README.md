@@ -24,6 +24,8 @@ waker some:custom:script
 
 It detects the package manager from `packageManager` in `package.json`, then lockfiles, and falls back to `npm`.
 
+The generated help screen renders ASCII art from your keyword, so `app`, `waker`, or any other valid keyword gets its own banner.
+
 ## Why
 
 I had this idea because I kept wanting a nice local command index for repos with a lot of package scripts. I asked AI to build the first version with me. This package was fully created with AI assistance from that idea.

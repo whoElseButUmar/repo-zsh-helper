@@ -52,8 +52,9 @@ test("dry-run prints a managed zsh block and does not write zshrc", () => {
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /# >>> repo-zsh-helper:app >>>/);
-  assert.match(result.stdout, /____  _____ ____   ___/);
-  assert.match(result.stdout, /APP COMMAND CENTER/);
+  assert.match(result.stdout, / ###   ####   ####/);
+  assert.match(result.stdout, /#   #  #   #  #   #/);
+  assert.match(result.stdout, /COMMAND CENTER/);
   assert.match(result.stdout, /local package_manager="pnpm"/);
   assert.match(result.stdout, /_app_run_script "check:fast" "\$\{@:2\}"/);
   assert.equal(fs.existsSync(zshrc), false);
