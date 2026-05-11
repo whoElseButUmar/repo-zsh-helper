@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { fileURLToPath } from "node:url";
 
-const VERSION = "0.1.3";
+const VERSION = readPackageVersion();
 const PACKAGE_MANAGERS = ["npm", "pnpm", "yarn", "bun"] as const;
 
 type PackageManager = typeof PACKAGE_MANAGERS[number];
@@ -23,6 +24,7 @@ type CliArgs = {
 };
 
 type PackageJson = {
+  version?: unknown;
   packageManager?: unknown;
   scripts?: Record<string, unknown>;
 };
@@ -44,6 +46,16 @@ type RemovedBlock = {
 };
 
 type CompletionResult = [string[], string];
+
+function readPackageVersion(): string {
+  const packagePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "package.json");
+  try {
+    const pkg = JSON.parse(fs.readFileSync(packagePath, "utf8")) as PackageJson;
+    return typeof pkg.version === "string" ? pkg.version : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
 
 function usage(): string {
   return `repo-zsh-helper ${VERSION}
