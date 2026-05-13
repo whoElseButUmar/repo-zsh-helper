@@ -21,6 +21,7 @@ type CliArgs = {
   help: boolean;
   version: boolean;
   confirmed?: boolean;
+  action?: "install" | "update" | "remove";
 };
 
 type PackageJson = {
@@ -43,6 +44,11 @@ type ManagedMarkers = {
 type RemovedBlock = {
   content: string;
   found: boolean;
+};
+
+type ManagedBlockInfo = {
+  keyword: string;
+  repo?: string;
 };
 
 type CompletionResult = [string[], string];
@@ -343,11 +349,27 @@ function truncate(value: string, width: number): string {
   return `${value.slice(0, width - 3)}...`;
 }
 
+function stripAnsi(value: string): string {
+  return value.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function padVisible(value: string, width: number): string {
+  const visible = stripAnsi(value);
+  if (visible.length >= width) return value;
+  return `${value}${" ".repeat(width - visible.length)}`;
+}
+
+function fitVisible(value: string, width: number): string {
+  const visible = stripAnsi(value);
+  if (visible.length <= width) return padVisible(value, width);
+  return truncate(visible, width);
+}
+
 function terminalBox(title: string, rows: string[], width = 86): string {
   const inner = width - 2;
   const top = frameTop(title, inner);
   const bottom = frameBottom(inner);
-  const body = rows.map((row) => `│ ${truncate(row, inner - 2).padEnd(inner - 2)} │`);
+  const body = rows.map((row) => `│ ${fitVisible(row, inner - 2)} │`);
   return [top, ...body, bottom].join("\n");
 }
 
@@ -527,6 +549,55 @@ function replaceManagedBlock(existing: string, generated: GeneratedBlock): strin
   return base ? `${base}\n\n${generated.block}` : generated.block;
 }
 
+function parseManagedBlocks(existing: string): ManagedBlockInfo[] {
+  const blocks: ManagedBlockInfo[] = [];
+  const blockPattern = /^# >>> repo-zsh-helper:([^ ]+) >>>\n([\s\S]*?)^# <<< repo-zsh-helper:\1 <<</gm;
+  let match: RegExpExecArray | null;
+
+  while ((match = blockPattern.exec(existing)) !== null) {
+    const keyword = match[1];
+    const body = match[2];
+    const repoMatch = body.match(/^\s*local repo=(.+)$/m);
+    let repo: string | undefined;
+
+    if (repoMatch) {
+      try {
+        const parsed = JSON.parse(repoMatch[1]) as unknown;
+        if (typeof parsed === "string") repo = parsed;
+      } catch {
+        repo = undefined;
+      }
+    }
+
+    blocks.push({ keyword, repo });
+  }
+
+  return blocks;
+}
+
+function sameRepoPath(a: string | undefined, b: string): boolean {
+  if (!a) return false;
+  try {
+    return fs.realpathSync(path.resolve(expandHome(a))) === fs.realpathSync(path.resolve(expandHome(b)));
+  } catch {
+    return path.resolve(expandHome(a)) === path.resolve(expandHome(b));
+  }
+}
+
+function existingBlocksForRepo(zshrcPath: string, repoPath: string): ManagedBlockInfo[] {
+  const existing = fs.existsSync(zshrcPath) ? fs.readFileSync(zshrcPath, "utf8") : "";
+  return parseManagedBlocks(existing).filter((block) => sameRepoPath(block.repo, repoPath));
+}
+
+const SETUP_BANNER = String.raw`
+██████╗ ███████╗██████╗  ██████╗       ███████╗███████╗██╗  ██╗
+██╔══██╗██╔════╝██╔══██╗██╔═══██╗      ╚══███╔╝██╔════╝██║  ██║
+██████╔╝█████╗  ██████╔╝██║   ██║█████╗  ███╔╝ ███████╗███████║
+██╔══██╗██╔══╝  ██╔═══╝ ██║   ██║╚════╝ ███╔╝  ╚════██║██╔══██║
+██║  ██║███████╗██║     ╚██████╔╝      ███████╗███████║██║  ██║
+╚═╝  ╚═╝╚══════╝╚═╝      ╚═════╝       ╚══════╝╚══════╝╚═╝  ╚═╝
+`.trim();
+
 const TTY_COLORS = {
   reset: "\x1b[0m",
   bold: "\x1b[1m",
@@ -536,10 +607,11 @@ const TTY_COLORS = {
   orange: "\x1b[38;2;255;184;77m",
   pink: "\x1b[38;2;255;93;163m",
   purple: "\x1b[38;2;180;124;255m",
+  red: "\x1b[38;2;255;92;92m",
   slate: "\x1b[38;2;137;148;171m"
 };
 
-type WizardField = "repo" | "keyword" | "confirm";
+type WizardField = "repo" | "action" | "keyword" | "confirm";
 
 type WizardState = {
   args: CliArgs;
@@ -548,6 +620,7 @@ type WizardState = {
   totalSteps: number;
   value: string;
   suggestions: string[];
+  existingBlocks: ManagedBlockInfo[];
   message: string;
 };
 
@@ -571,24 +644,51 @@ function colorBox(title: string, rows: string[], accent = TTY_COLORS.cyan, width
   const inner = width - 2;
   const top = color(frameTop(title, inner), accent);
   const bottom = color(frameBottom(inner), accent);
-  const body = rows.map((row) => `${color("│", accent)} ${truncate(row, inner - 2).padEnd(inner - 2)} ${color("│", accent)}`);
+  const body = rows.map((row) => `${color("│", accent)} ${fitVisible(row, inner - 2)} ${color("│", accent)}`);
   return [top, ...body, bottom].join("\n");
+}
+
+function statCards(rows: Array<[string, string, string]>): string {
+  const width = Math.floor((ttyWidth() - 5) / 3);
+  const cards = rows.map(([label, value, accent]) => colorBox("", [
+    `${color(value, accent)} ${color(label, TTY_COLORS.dim)}`
+  ], accent, width).split("\n"));
+  const height = Math.max(...cards.map((card) => card.length));
+  const out: string[] = [];
+
+  for (let i = 0; i < height; i += 1) {
+    out.push(cards.map((card) => card[i] || "").join(" "));
+  }
+
+  return out.join("\n");
 }
 
 function renderWizard(state: WizardState): void {
   const repo = state.args.repo || (state.field === "repo" ? state.value || "." : "pending");
   const keyword = state.args.keyword || (state.field === "keyword" ? state.value || "pending" : "pending");
-  const action = state.args.remove ? "remove managed block" : "install command dashboard";
+  const action = state.field === "action"
+    ? "choose"
+    : state.args.remove
+    ? "remove"
+    : state.args.action === "update"
+      ? "update"
+      : "install";
   const promptLabel = state.field === "repo"
     ? "Repo path"
+    : state.field === "action"
+      ? "Existing helper found"
     : state.field === "keyword"
       ? "Shell keyword"
-      : `${state.args.remove ? "Remove from" : "Install into"} ~/.zshrc?`;
+      : `${state.args.remove ? "Remove from" : state.args.action === "update" ? "Update in" : "Install into"} ~/.zshrc?`;
   const inputPreview = state.field === "confirm"
     ? "Press y to confirm, n or Enter to cancel"
+    : state.field === "action"
+      ? "u update existing   r remove existing   n add new   q quit"
     : `${state.field === "repo" && !state.value ? "." : state.value}${color("█", TTY_COLORS.green)}`;
   const keyRows = state.field === "confirm"
     ? ["y confirm   n/Enter cancel   Ctrl-C quit", "A backup is created before any managed block is changed."]
+    : state.field === "action"
+      ? ["u update   r remove   n new helper   q/Ctrl-C quit", state.message || "Choose the smallest change for this repo."]
     : [
         `Enter accept${state.field === "repo" ? " current directory" : ""}   Tab autocomplete   Backspace edit`,
         "Ctrl-C quit",
@@ -597,11 +697,20 @@ function renderWizard(state: WizardState): void {
   const suggestionRows = state.suggestions.length > 0
     ? state.suggestions.map((suggestion, index) => `${index === 0 ? ">" : " "} ${suggestion}`)
     : ["No nearby package repos found. Type a path, or press Enter for current directory."];
+  const existingRows = state.existingBlocks.length > 0
+    ? state.existingBlocks.map((block, index) => `${index === 0 ? ">" : " "} ${block.keyword}  ${block.repo || "(repo missing)"}`)
+    : [];
 
   clearTty();
-  output.write(color(asciiBanner("repo"), TTY_COLORS.cyan));
+  output.write(color(SETUP_BANNER, TTY_COLORS.cyan));
   output.write("\n");
   output.write(`${color("repo-zsh-helper setup", TTY_COLORS.bold)}  ${TTY_COLORS.dim}step${TTY_COLORS.reset} ${color(`${state.step}/${state.totalSteps}`, TTY_COLORS.pink)}  ${TTY_COLORS.dim}version${TTY_COLORS.reset} ${color(VERSION, TTY_COLORS.orange)}\n`);
+  output.write(statCards([
+    ["action", action, state.field === "action" ? TTY_COLORS.purple : state.args.remove ? TTY_COLORS.red : state.args.action === "update" ? TTY_COLORS.orange : TTY_COLORS.green],
+    ["matches", String(state.existingBlocks.length), state.existingBlocks.length > 0 ? TTY_COLORS.purple : TTY_COLORS.slate],
+    ["target", state.args.zshrc ? path.basename(state.args.zshrc) : "~/.zshrc", TTY_COLORS.cyan]
+  ]));
+  output.write("\n");
   output.write(colorBox("plan", [
     `action: ${action}`,
     `repo: ${repo}`,
@@ -611,6 +720,10 @@ function renderWizard(state: WizardState): void {
   output.write("\n");
   if (state.field === "repo") {
     output.write(colorBox("repo suggestions", suggestionRows, TTY_COLORS.purple));
+    output.write("\n");
+  }
+  if (state.field === "action" && existingRows.length > 0) {
+    output.write(colorBox("existing helpers for this repo", existingRows, TTY_COLORS.purple));
     output.write("\n");
   }
   output.write(colorBox(promptLabel, [inputPreview], state.field === "confirm" ? TTY_COLORS.orange : TTY_COLORS.green));
@@ -628,14 +741,35 @@ async function ttyPromptField(state: WizardState): Promise<string | undefined> {
       const values = [...buffer.toString("utf8")];
 
       for (const value of values) {
-        if (value === "\u0003") {
-          cleanup();
-          output.write("\n");
-          resolve(undefined);
-          return;
-        }
+      if (value === "\u0003") {
+        cleanup();
+        output.write("\n");
+        resolve(undefined);
+        return;
+      }
 
-        if (state.field === "confirm") {
+        if (state.field === "action") {
+          if (/^u$/i.test(value)) {
+            cleanup();
+            resolve("update");
+            return;
+          }
+          if (/^r$/i.test(value)) {
+            cleanup();
+            resolve("remove");
+            return;
+          }
+          if (/^n$/i.test(value)) {
+            cleanup();
+            resolve("new");
+            return;
+          }
+          if (/^q$/i.test(value) || value === "\x1b") {
+            cleanup();
+            resolve(undefined);
+            return;
+          }
+        } else if (state.field === "confirm") {
           if (/^y$/i.test(value)) {
             cleanup();
             resolve("yes");
@@ -682,31 +816,96 @@ async function ttyPromptField(state: WizardState): Promise<string | undefined> {
 }
 
 async function promptIfMissingTty(args: CliArgs): Promise<CliArgs> {
-  const fields: WizardField[] = [];
-  if (!args.remove && !args.repo) fields.push("repo");
-  if (!args.keyword) fields.push("keyword");
-  if (!args.yes && !args.dryRun) fields.push("confirm");
+  let step = 1;
+  let existingBlocks: ManagedBlockInfo[] = [];
+  const zshrcPath = path.resolve(expandHome(args.zshrc || path.join(os.homedir(), ".zshrc")));
 
-  for (let i = 0; i < fields.length; i += 1) {
-    const field = fields[i];
-    const suggestions = field === "repo" ? repoPathSuggestions() : [];
+  const prompt = async (
+    field: WizardField,
+    {
+      value = "",
+      suggestions = [],
+      message = "",
+      totalSteps = 3
+    }: {
+      value?: string;
+      suggestions?: string[];
+      message?: string;
+      totalSteps?: number;
+    } = {}
+  ) => {
     const result = await ttyPromptField({
       args,
       field,
-      step: i + 1,
-      totalSteps: fields.length,
-      value: "",
+      step,
+      totalSteps,
+      value,
       suggestions,
-      message: field === "repo" ? "Press Enter for current directory, or Tab for path completion." : ""
+      existingBlocks,
+      message
+    });
+    step += 1;
+    return result;
+  };
+
+  if (!args.remove && !args.repo) {
+    const result = await prompt("repo", {
+      suggestions: repoPathSuggestions(),
+      message: "Press Enter for current directory, or Tab for path completion."
     });
 
     if (result === undefined) {
       args.confirmed = false;
       return args;
     }
-    if (field === "repo") args.repo = result || ".";
-    else if (field === "keyword") args.keyword = result;
-    else args.confirmed = result === "yes";
+    args.repo = result || ".";
+  }
+
+  const repoForLookup = args.repo || ".";
+  existingBlocks = existingBlocksForRepo(zshrcPath, repoForLookup);
+
+  if (args.remove && !args.keyword && existingBlocks.length === 1) {
+    args.keyword = existingBlocks[0].keyword;
+  }
+
+  if (!args.remove && !args.keyword && existingBlocks.length > 0) {
+    const result = await prompt("action", {
+      totalSteps: 3,
+      message: `Found ${existingBlocks.length} helper${existingBlocks.length === 1 ? "" : "s"} for this repo.`
+    });
+
+    if (result === undefined) {
+      args.confirmed = false;
+      return args;
+    }
+    if (result === "update") {
+      args.action = "update";
+      args.keyword = existingBlocks[0].keyword;
+    } else if (result === "remove") {
+      args.action = "remove";
+      args.remove = true;
+      args.keyword = existingBlocks[0].keyword;
+    } else {
+      args.action = "install";
+    }
+  }
+
+  if (!args.keyword) {
+    const result = await prompt("keyword", {
+      totalSteps: 3,
+      message: "Use a short shell command name, like app, api, waker, or hub."
+    });
+
+    if (result === undefined) {
+      args.confirmed = false;
+      return args;
+    }
+    args.keyword = result;
+  }
+
+  if (!args.yes && !args.dryRun) {
+    const result = await prompt("confirm", { totalSteps: step });
+    args.confirmed = result === "yes";
   }
 
   return args;
@@ -812,12 +1011,13 @@ async function main(): Promise<void> {
   }
 
   const existing = fs.existsSync(zshrcPath) ? fs.readFileSync(zshrcPath, "utf8") : "";
+  const hadManagedBlock = removeManagedBlock(existing, generated).found;
   const backupPath = uniqueBackupPath(zshrcPath);
   fs.mkdirSync(path.dirname(zshrcPath), { recursive: true });
   fs.writeFileSync(backupPath, existing, { mode: 0o600 });
   fs.writeFileSync(zshrcPath, replaceManagedBlock(existing, generated), { mode: 0o600 });
 
-  process.stdout.write(`\n${terminalBox("Installed", [
+  process.stdout.write(`\n${terminalBox(args.action === "update" || hadManagedBlock ? "Updated" : "Installed", [
     `function: ${shellFunctionName(args.keyword)}()`,
     `scripts: ${scripts.length}`,
     `runner: ${packageManagerCommand(packageManager)}`,

@@ -72,6 +72,8 @@ test("install preserves unrelated zshrc content and replaces only its own block"
 
   assert.equal(first.status, 0, first.stderr);
   assert.equal(second.status, 0, second.stderr);
+  assert.match(first.stdout, /Installed/);
+  assert.match(second.stdout, /Updated/);
 
   const output = fs.readFileSync(zshrc, "utf8");
   assert.match(output, /^export KEEP_ME=1/m);

@@ -6,7 +6,7 @@ Generate a safe `zsh` command center from any repo's `package.json` scripts.
 npx repo-zsh-helper
 ```
 
-The interactive installer and generated command both render as compact terminal dashboards: keyword banner, setup plan, repo suggestions, grouped script panes, shortcut pane, and controls footer.
+The interactive installer and generated command both render as compact terminal dashboards: keyword banner, setup plan, repo suggestions, grouped script panes, shortcut pane, and controls footer. When you run it in a repo that already has a managed helper, it offers update, remove, or add-new paths before changing anything.
 
 It asks for:
 
