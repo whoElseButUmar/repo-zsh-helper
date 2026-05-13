@@ -55,6 +55,9 @@ test("dry-run prints a managed zsh block and does not write zshrc", () => {
   assert.match(result.stdout, / ###   ####   ####/);
   assert.match(result.stdout, /#   #  #   #  #   #/);
   assert.match(result.stdout, /COMMAND CENTER/);
+  assert.match(result.stdout, /app command dashboard/);
+  assert.match(result.stdout, /Launch/);
+  assert.match(result.stdout, /Controls/);
   assert.match(result.stdout, /local package_manager="pnpm"/);
   assert.match(result.stdout, /_app_run_script "check:fast" "\$\{@:2\}"/);
   assert.equal(fs.existsSync(zshrc), false);
@@ -90,7 +93,8 @@ test("remove deletes only the managed block and creates a backup", () => {
 
   assert.equal(install.status, 0, install.stderr);
   assert.equal(remove.status, 0, remove.stderr);
-  assert.match(remove.stdout, /Removed managed block/);
+  assert.match(remove.stdout, /Removed/);
+  assert.match(remove.stdout, /function: app\(\)/);
   assert.match(remove.stdout, /unfunction app 2>\/dev\/null; source ~\/\.zshrc/);
 
   const output = fs.readFileSync(zshrc, "utf8");

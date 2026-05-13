@@ -18,23 +18,22 @@ function readPackageVersion() {
     }
 }
 function usage() {
-    return `repo-zsh-helper ${VERSION}
-
-Generate a zsh command center from a repo's package.json scripts.
-
-Usage:
-  repo-zsh-helper
-  repo-zsh-helper --repo . --keyword app
+    return `${terminalBox("repo-zsh-helper", [
+        `version ${VERSION}`,
+        "Generate a polished zsh command dashboard from package.json scripts.",
+        "Usage: repo-zsh-helper --repo . --keyword app",
+        "Interactive: repo-zsh-helper"
+    ])}
 
 Options:
   --repo <path>       Repo path. Defaults to ".".
   --keyword <name>    Shell command name to install.
   --zshrc <path>      Target zshrc path. Defaults to ~/.zshrc.
-  --yes              Skip confirmation prompt.
-  --dry-run          Print generated block without writing.
-  --remove           Remove this helper's managed block for the keyword.
-  --help             Show this help.
-  --version          Show version.
+  --yes               Skip confirmation prompt.
+  --dry-run           Print generated block without writing.
+  --remove            Remove this helper's managed block for the keyword.
+  --help              Show this help.
+  --version           Show version.
 `;
 }
 function parseArgs(argv) {
@@ -277,6 +276,37 @@ function asciiBanner(keyword) {
         .replace(/\s+$/, ""));
     return [...art, "COMMAND CENTER"].join("\n");
 }
+function line(char, width) {
+    return char.repeat(Math.max(0, width));
+}
+function frameTop(title, width = 94) {
+    const label = title ? ` ${title} ` : "";
+    const remaining = Math.max(0, width - label.length);
+    return `╭${line("─", Math.floor(remaining / 2))}${label}${line("─", Math.ceil(remaining / 2))}╮`;
+}
+function frameBottom(width = 94) {
+    return `╰${line("─", width)}╯`;
+}
+function zshPrintP(text) {
+    return `      print -P ${zshQuote(text)}\n`;
+}
+function zshPrint(text = "") {
+    return `      print ${zshQuote(text)}\n`;
+}
+function truncate(value, width) {
+    if (value.length <= width)
+        return value;
+    if (width <= 3)
+        return value.slice(0, width);
+    return `${value.slice(0, width - 3)}...`;
+}
+function terminalBox(title, rows, width = 86) {
+    const inner = width - 2;
+    const top = frameTop(title, inner);
+    const bottom = frameBottom(inner);
+    const body = rows.map((row) => `│ ${truncate(row, inner - 2).padEnd(inner - 2)} │`);
+    return [top, ...body, bottom].join("\n");
+}
 function displayLabel(script) {
     return script
         .replace(/[:_-]+/g, " ")
@@ -336,6 +366,7 @@ function generateBlock({ keyword, functionName, packageManager, repoPath, script
     const shortcuts = makeShortcutMap(scripts);
     let out = "";
     const command = packageManagerCommand(packageManager);
+    const scriptCount = scripts.length;
     out += `${startMarker}\n`;
     out += `${functionName}() {\n`;
     out += `  local repo=${zshQuote(repoPath)}\n`;
@@ -352,28 +383,39 @@ function generateBlock({ keyword, functionName, packageManager, repoPath, script
     out += `  cd "$repo" || return\n\n`;
     out += `  case "$1" in\n`;
     out += `    ""|help)\n`;
-    out += `      print -P "%F{cyan}"\n`;
+    out += zshPrintP("%F{cyan}");
     out += `      cat <<'EOF'\n`;
     out += `${banner}\n`;
     out += `EOF\n`;
-    out += `      print -P "%f%F{244}repo:%f $repo"\n`;
-    out += `      print -P "%F{244}runner:%f ${command}"\n`;
-    out += `      print\n`;
+    out += zshPrintP("%f");
+    out += zshPrintP(`%F{cyan}${frameTop(`${keyword} command dashboard`)}%f`);
+    out += `      printf "│ %-18s │ %-18s │ %-18s │ %-25s │\\n" "keyword: ${keyword}" "scripts: ${scriptCount}" "runner: ${command}" "repo: \${repo:t}"\n`;
+    out += zshPrintP(`%F{cyan}${frameBottom()}%f`);
+    out += zshPrint();
     for (const group of orderedGroups) {
-        out += `      print -P "%F{cyan}${group}%f"\n`;
+        out += zshPrintP(`%F{cyan}${frameTop(group)}%f`);
+        out += `      printf "│ %-28s  %-26s  %-32s │\\n" "command" "label" "runs"\n`;
+        out += zshPrintP(`%F{244}├${line("─", 94)}┤%f`);
         for (const script of groups.get(group)) {
-            out += `      printf "  %-28s %-30s ${command} %s\\n" ${zshQuote(`${keyword} ${script}`)} ${zshQuote(displayLabel(script))} ${zshQuote(script)}\n`;
+            out += `      printf "│ %-28.28s  %-26.26s  %-32.32s │\\n" ${zshQuote(`${keyword} ${script}`)} ${zshQuote(displayLabel(script))} ${zshQuote(`${command} ${script}`)}\n`;
         }
-        out += `      print\n`;
+        out += zshPrintP(`%F{cyan}${frameBottom()}%f`);
+        out += zshPrint();
     }
     if (shortcuts.length > 0) {
-        out += `      print -P "%F{cyan}Shortcuts%f"\n`;
+        out += zshPrintP(`%F{magenta}${frameTop("Shortcuts")}%f`);
+        out += `      printf "│ %-28s  %-26s  %-32s │\\n" "shortcut" "target" "runs"\n`;
+        out += zshPrintP(`%F{244}├${line("─", 94)}┤%f`);
         for (const [alias, target] of shortcuts) {
-            out += `      printf "  %-28s %-30s ${command} %s\\n" ${zshQuote(`${keyword} ${alias}`)} ${zshQuote(`Alias for ${target}`)} ${zshQuote(target)}\n`;
+            out += `      printf "│ %-28.28s  %-26.26s  %-32.32s │\\n" ${zshQuote(`${keyword} ${alias}`)} ${zshQuote(target)} ${zshQuote(`${command} ${target}`)}\n`;
         }
-        out += `      print\n`;
+        out += zshPrintP(`%F{magenta}${frameBottom()}%f`);
+        out += zshPrint();
     }
-    out += `      print -P "%F{244}Tip:%f pass extra args after any command, e.g. ${keyword} check --force"\n`;
+    out += zshPrintP(`%F{244}${frameTop("Controls")}%f`);
+    out += `      printf "│ %-92s │\\n" "Run: ${keyword} <script> [...args]     Help: ${keyword} help     Extra args: ${keyword} check --force"\n`;
+    out += `      printf "│ %-92s │\\n" "Fallback: unknown subcommands pass directly to ${command}, so custom scripts still work."\n`;
+    out += zshPrintP(`%F{244}${frameBottom()}%f`);
     out += `      ;;\n`;
     for (const [alias, target] of shortcuts) {
         out += `    ${alias})\n`;
@@ -478,9 +520,12 @@ async function main() {
         const backupPath = uniqueBackupPath(zshrcPath);
         fs.writeFileSync(backupPath, existing, { mode: 0o600 });
         fs.writeFileSync(zshrcPath, removed.content ? `${removed.content}\n` : "", { mode: 0o600 });
-        process.stdout.write(`\nRemoved managed block for ${shellFunctionName(args.keyword)}() from ${zshrcPath}\n`);
-        process.stdout.write(`Backup: ${backupPath}\n`);
-        process.stdout.write(`Run: unfunction ${shellFunctionName(args.keyword)} 2>/dev/null; source ~/.zshrc\n`);
+        process.stdout.write(`\n${terminalBox("Removed", [
+            `function: ${shellFunctionName(args.keyword)}()`,
+            `zshrc: ${zshrcPath}`,
+            `backup: ${backupPath}`,
+            `run: unfunction ${shellFunctionName(args.keyword)} 2>/dev/null; source ~/.zshrc`
+        ])}\n`);
         return;
     }
     const repoPath = fs.realpathSync(path.resolve(expandHome(args.repo || ".")));
@@ -508,11 +553,15 @@ async function main() {
     fs.mkdirSync(path.dirname(zshrcPath), { recursive: true });
     fs.writeFileSync(backupPath, existing, { mode: 0o600 });
     fs.writeFileSync(zshrcPath, replaceManagedBlock(existing, generated), { mode: 0o600 });
-    process.stdout.write(`\nInstalled ${shellFunctionName(args.keyword)}() into ${zshrcPath}\n`);
-    process.stdout.write(`Repo: ${repoPath}\n`);
-    process.stdout.write(`Runner: ${packageManagerCommand(packageManager)}\n`);
-    process.stdout.write(`Backup: ${backupPath}\n`);
-    process.stdout.write("Run: source ~/.zshrc\n");
+    process.stdout.write(`\n${terminalBox("Installed", [
+        `function: ${shellFunctionName(args.keyword)}()`,
+        `scripts: ${scripts.length}`,
+        `runner: ${packageManagerCommand(packageManager)}`,
+        `repo: ${repoPath}`,
+        `zshrc: ${zshrcPath}`,
+        `backup: ${backupPath}`,
+        "run: source ~/.zshrc"
+    ])}\n`);
 }
 main().catch((error) => {
     if (!(error instanceof Error))

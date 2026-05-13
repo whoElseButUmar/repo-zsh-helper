@@ -6,6 +6,8 @@ Generate a safe `zsh` command center from any repo's `package.json` scripts.
 npx repo-zsh-helper
 ```
 
+The generated command now renders as a compact terminal dashboard: keyword banner, repo/runner/script summary, grouped script panes, shortcut pane, and a controls footer.
+
 It asks for:
 
 - the repo path, defaulting to `.`
@@ -24,7 +26,7 @@ waker some:custom:script
 
 It detects the package manager from `packageManager` in `package.json`, then lockfiles, and falls back to `npm`.
 
-The generated help screen renders ASCII art from your keyword, so `app`, `waker`, or any other valid keyword gets its own banner.
+The generated help screen renders ASCII art from your keyword, so `app`, `waker`, or any other valid keyword gets its own banner and command dashboard.
 
 ## Why
 
