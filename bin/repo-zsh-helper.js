@@ -563,6 +563,7 @@ const TTY_COLORS = {
     red: "\x1b[38;2;255;92;92m",
     slate: "\x1b[38;2;137;148;171m"
 };
+const TTY_MARKERS = ["¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸"];
 function ttyEnabled() {
     return Boolean(input.isTTY && output.isTTY);
 }
@@ -575,16 +576,10 @@ function clearTty() {
 function ttyWidth() {
     return Math.max(78, Math.min(output.columns || 100, 120));
 }
-function colorBox(title, rows, accent = TTY_COLORS.cyan, width = ttyWidth() - 2) {
+function btopPanel(title, rows, accent = TTY_COLORS.cyan, width = ttyWidth() - 2, marker) {
     const inner = width - 2;
-    const top = color(frameTop(title, inner), accent);
-    const bottom = color(frameBottom(inner), accent);
-    const body = rows.map((row) => `${color("│", accent)} ${fitVisible(row, inner - 2)} ${color("│", accent)}`);
-    return [top, ...body, bottom].join("\n");
-}
-function btopPanel(title, rows, accent = TTY_COLORS.cyan, width = ttyWidth() - 2) {
-    const inner = width - 2;
-    const label = title ? ` ${title} ` : "";
+    const labelText = `${marker || ""}${title}`;
+    const label = title ? ` ${labelText} ` : "";
     const top = `${color("╭", accent)}${color(label, accent)}${color(line("─", Math.max(0, inner - stripAnsi(label).length)), accent)}${color("╮", accent)}`;
     const bottom = `${color("╰", accent)}${color(line("─", inner), accent)}${color("╯", accent)}`;
     const body = rows.map((row) => `${color("│", accent)}${fitVisible(` ${row}`, inner)}${color("│", accent)}`);
@@ -601,20 +596,74 @@ function hstack(blocks, gap = 2) {
     return rows.join("\n");
 }
 function kv(label, value, accent = TTY_COLORS.fg) {
-    return `${color(label.padEnd(8), TTY_COLORS.dim)} ${color(value, accent)}`;
+    return `${color(label.padEnd(7), TTY_COLORS.dim)} ${color(value, accent)}`;
 }
-function scriptCount(repoPath) {
+function scriptsForRepo(repoPath) {
     try {
         const pkg = JSON.parse(fs.readFileSync(path.join(path.resolve(expandHome(repoPath)), "package.json"), "utf8"));
-        return Object.keys(pkg.scripts || {}).length;
+        return Object.keys(pkg.scripts || {}).sort();
     }
     catch {
-        return 0;
+        return [];
     }
 }
 function compactPath(value) {
     const home = os.homedir();
     return value.startsWith(home) ? `~${value.slice(home.length)}` : value;
+}
+function btopMeter(label, value, total, accent = TTY_COLORS.green, width = 14) {
+    const pct = total > 0 ? Math.round((value / total) * 100) : 0;
+    const filled = total > 0 ? Math.max(1, Math.round((value / total) * width)) : 0;
+    const bar = `${color(line("■", filled), accent)}${color(line("·", Math.max(0, width - filled)), TTY_COLORS.slate)}`;
+    return `${color(label.padEnd(10), TTY_COLORS.dim)} ${bar} ${color(`${pct}%`.padStart(4), TTY_COLORS.fg)}`;
+}
+function scriptStats(scripts) {
+    const counts = new Map([
+        ["launch", { count: 0, accent: TTY_COLORS.green }],
+        ["quality", { count: 0, accent: TTY_COLORS.cyan }],
+        ["ops", { count: 0, accent: TTY_COLORS.orange }],
+        ["other", { count: 0, accent: TTY_COLORS.purple }]
+    ]);
+    for (const script of scripts) {
+        const group = groupFor(script);
+        if (group === "Launch")
+            counts.get("launch").count += 1;
+        else if (group === "Quality")
+            counts.get("quality").count += 1;
+        else if (group === "Deploy + Operations")
+            counts.get("ops").count += 1;
+        else
+            counts.get("other").count += 1;
+    }
+    return [...counts.entries()].map(([label, value]) => ({ label, ...value }));
+}
+function scriptWave(scripts, width) {
+    if (scripts.length === 0)
+        return color(line("·", width), TTY_COLORS.slate);
+    const chars = ["·", "˙", ":", "⠆", "⣿"];
+    let out = "";
+    for (let i = 0; i < width; i += 1) {
+        const script = scripts[i % scripts.length] || "";
+        const score = (script.length + i + scripts.length) % chars.length;
+        const accent = i % 5 === 0 ? TTY_COLORS.orange : i % 3 === 0 ? TTY_COLORS.cyan : TTY_COLORS.green;
+        out += color(chars[score], accent);
+    }
+    return out;
+}
+function topBar(state, defaultAction) {
+    const width = ttyWidth() - 2;
+    const left = `${color("¹setup", TTY_COLORS.pink)}${color("┌menu┐", TTY_COLORS.slate)} ${color("repo-zsh-helper", TTY_COLORS.bold)} ${color(`v${VERSION}`, TTY_COLORS.orange)}`;
+    const target = compactPath(path.resolve(expandHome(state.args.zshrc || "~/.zshrc")));
+    const middle = `${color("step", TTY_COLORS.dim)} ${color(`${state.step}/${state.totalSteps}`, TTY_COLORS.green)} ${color("target", TTY_COLORS.dim)} ${color(target, TTY_COLORS.cyan)}`;
+    const compactMiddle = `${color("step", TTY_COLORS.dim)} ${color(`${state.step}/${state.totalSteps}`, TTY_COLORS.green)}`;
+    const right = `${defaultAction} ${color("·", TTY_COLORS.slate)} ${color("Ctrl-C", TTY_COLORS.dim)}`;
+    const selectedMiddle = stripAnsi(left).length + stripAnsi(middle).length + stripAnsi(right).length + 4 <= width
+        ? middle
+        : compactMiddle;
+    const used = stripAnsi(left).length + stripAnsi(selectedMiddle).length + stripAnsi(right).length;
+    const gap = Math.max(1, Math.floor((width - used) / 2));
+    const row = `${left}${" ".repeat(gap)}${selectedMiddle}${" ".repeat(gap)}${right}`;
+    return stripAnsi(row).length <= width ? row : `${left} ${compactMiddle}`;
 }
 function statusText(state) {
     if (state.existingBlocks.length === 0)
@@ -627,7 +676,8 @@ function renderWizard(state) {
     const repoName = repo === "pending" ? "pending" : repoDisplayName(repo);
     const repoPath = repo === "pending" ? "pending" : compactPath(path.resolve(expandHome(repo)));
     const zshrc = state.args.zshrc || "~/.zshrc";
-    const count = repo === "pending" ? 0 : scriptCount(repo);
+    const scripts = repo === "pending" ? [] : scriptsForRepo(repo);
+    const count = scripts.length;
     const action = state.field === "action"
         ? "choose"
         : state.args.remove
@@ -663,39 +713,64 @@ function renderWizard(state) {
         ? state.existingBlocks.map((block, index) => `${index === 0 ? ">" : " "} ${block.keyword}  ${block.repo || "(repo missing)"}`)
         : [];
     const panelWidth = Math.floor((ttyWidth() - 6) / 2);
+    const fullWidth = ttyWidth() - 2;
     const defaultAction = state.field === "action"
         ? `Enter ${color("update", TTY_COLORS.green)}`
         : state.field === "confirm"
             ? `Enter ${color("apply", TTY_COLORS.green)}`
             : `Enter ${color("accept", TTY_COLORS.green)}`;
+    const helperAccent = state.existingBlocks.length > 0 ? TTY_COLORS.purple : TTY_COLORS.slate;
+    const keywordAccent = keyword === "pending" ? TTY_COLORS.slate : TTY_COLORS.green;
+    const modeAccent = action === "remove" ? TTY_COLORS.red : action === "update" ? TTY_COLORS.orange : TTY_COLORS.green;
+    const statsRows = scriptStats(scripts)
+        .filter((stat) => stat.count > 0 || scripts.length === 0)
+        .slice(0, 4)
+        .map((stat) => btopMeter(stat.label, stat.count, Math.max(1, count), stat.accent));
+    const commandRows = scripts.slice(0, 4).map((script, index) => {
+        const marker = index === 0 ? ">" : " ";
+        return `${color(marker, TTY_COLORS.orange)} ${color(script.padEnd(18).slice(0, 18), TTY_COLORS.fg)} ${color(groupFor(script), TTY_COLORS.dim)}`;
+    });
+    while (commandRows.length < 4)
+        commandRows.push(color("· waiting for package.json scripts", TTY_COLORS.slate));
     clearTty();
-    output.write(`${color("¹setup", TTY_COLORS.pink)}${color("│", TTY_COLORS.slate)}${color("repo-zsh-helper", TTY_COLORS.bold)} ${color(`v${VERSION}`, TTY_COLORS.orange)} ${color("step", TTY_COLORS.dim)} ${color(`${state.step}/${state.totalSteps}`, TTY_COLORS.green)} ${color("·", TTY_COLORS.slate)} ${defaultAction} ${color("· Ctrl-C quit", TTY_COLORS.dim)}\n`);
+    output.write(`${topBar(state, defaultAction)}\n`);
     output.write(hstack([
         btopPanel("workspace", [
             kv("repo", repoName, TTY_COLORS.green),
             kv("path", repoPath, TTY_COLORS.slate),
-            kv("scripts", String(count), TTY_COLORS.orange),
-            kv("zshrc", zshrc, TTY_COLORS.cyan)
-        ], TTY_COLORS.cyan, panelWidth),
-        btopPanel(action === "choose" ? "decision" : "next", [
-            kv("mode", action, action === "remove" ? TTY_COLORS.red : action === "update" ? TTY_COLORS.orange : TTY_COLORS.green),
-            kv("helper", statusText(state), state.existingBlocks.length > 0 ? TTY_COLORS.purple : TTY_COLORS.slate),
-            kv("keyword", keyword, TTY_COLORS.green),
-            kv("default", stripAnsi(defaultAction), TTY_COLORS.orange)
-        ], state.field === "action" ? TTY_COLORS.purple : TTY_COLORS.green, panelWidth)
+            kv("zshrc", zshrc, TTY_COLORS.cyan),
+            kv("helper", statusText(state), helperAccent)
+        ], TTY_COLORS.cyan, panelWidth, TTY_MARKERS[1]),
+        btopPanel("scripts", [
+            `${color(String(count).padStart(3), TTY_COLORS.orange)} ${color("total", TTY_COLORS.dim)} ${scriptWave(scripts, Math.max(8, panelWidth - 18))}`,
+            ...statsRows.slice(0, 3)
+        ], TTY_COLORS.green, panelWidth, TTY_MARKERS[2])
     ]));
     output.write("\n");
-    if (state.field === "repo") {
-        output.write(btopPanel("repo suggestions", suggestionRows, TTY_COLORS.purple));
-        output.write("\n");
-    }
-    if (state.field === "action" && existingRows.length > 0) {
-        output.write(btopPanel("already set up", existingRows, TTY_COLORS.purple));
-        output.write("\n");
-    }
-    output.write(btopPanel(promptLabel, [inputPreview], state.field === "confirm" ? TTY_COLORS.orange : TTY_COLORS.green));
+    output.write(hstack([
+        btopPanel(action === "choose" ? "decision" : "plan", [
+            kv("mode", action, modeAccent),
+            kv("keyword", keyword, keywordAccent),
+            kv("default", stripAnsi(defaultAction), TTY_COLORS.orange),
+            kv("backup", "created before write", TTY_COLORS.slate)
+        ], state.field === "action" ? TTY_COLORS.purple : TTY_COLORS.orange, panelWidth, TTY_MARKERS[3]),
+        btopPanel("commands", commandRows, TTY_COLORS.purple, panelWidth, TTY_MARKERS[4])
+    ]));
     output.write("\n");
-    output.write(btopPanel("keys", keyRows, TTY_COLORS.slate));
+    const contextRows = state.field === "repo"
+        ? suggestionRows
+        : state.field === "action" && existingRows.length > 0
+            ? existingRows
+            : [
+                kv("repo", repoName, TTY_COLORS.green),
+                kv("path", repoPath, TTY_COLORS.slate),
+                kv("action", action, modeAccent)
+            ];
+    output.write(btopPanel(state.field === "repo" ? "repo suggestions" : state.field === "action" ? "installed helpers" : "selection", contextRows, state.field === "repo" ? TTY_COLORS.purple : helperAccent, fullWidth, TTY_MARKERS[5]));
+    output.write("\n");
+    output.write(btopPanel(promptLabel, [inputPreview], state.field === "confirm" ? TTY_COLORS.orange : TTY_COLORS.green, fullWidth, TTY_MARKERS[6]));
+    output.write("\n");
+    output.write(btopPanel("keys", keyRows, TTY_COLORS.slate, fullWidth, TTY_MARKERS[7]));
 }
 async function ttyPromptField(state) {
     input.setRawMode(true);
