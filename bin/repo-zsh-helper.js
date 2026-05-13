@@ -461,7 +461,174 @@ function replaceManagedBlock(existing, generated) {
     const base = removed.content.replace(/\n*$/, "");
     return base ? `${base}\n\n${generated.block}` : generated.block;
 }
+const TTY_COLORS = {
+    reset: "\x1b[0m",
+    bold: "\x1b[1m",
+    dim: "\x1b[2m",
+    cyan: "\x1b[38;2;34;211;238m",
+    green: "\x1b[38;2;90;214;125m",
+    orange: "\x1b[38;2;255;184;77m",
+    pink: "\x1b[38;2;255;93;163m",
+    purple: "\x1b[38;2;180;124;255m",
+    slate: "\x1b[38;2;137;148;171m"
+};
+function ttyEnabled() {
+    return Boolean(input.isTTY && output.isTTY);
+}
+function color(text, value) {
+    return `${value}${text}${TTY_COLORS.reset}`;
+}
+function clearTty() {
+    output.write("\x1b[2J\x1b[H");
+}
+function ttyWidth() {
+    return Math.max(78, Math.min(output.columns || 100, 120));
+}
+function colorBox(title, rows, accent = TTY_COLORS.cyan, width = ttyWidth() - 2) {
+    const inner = width - 2;
+    const top = color(frameTop(title, inner), accent);
+    const bottom = color(frameBottom(inner), accent);
+    const body = rows.map((row) => `${color("│", accent)} ${truncate(row, inner - 2).padEnd(inner - 2)} ${color("│", accent)}`);
+    return [top, ...body, bottom].join("\n");
+}
+function renderWizard(state) {
+    const repo = state.args.repo || (state.field === "repo" ? state.value || "." : "pending");
+    const keyword = state.args.keyword || (state.field === "keyword" ? state.value || "pending" : "pending");
+    const action = state.args.remove ? "remove managed block" : "install command dashboard";
+    const promptLabel = state.field === "repo"
+        ? "Repo path"
+        : state.field === "keyword"
+            ? "Shell keyword"
+            : `${state.args.remove ? "Remove from" : "Install into"} ~/.zshrc?`;
+    const inputPreview = state.field === "confirm"
+        ? "Press y to confirm, n or Enter to cancel"
+        : `${state.field === "repo" && !state.value ? "." : state.value}${color("█", TTY_COLORS.green)}`;
+    const keyRows = state.field === "confirm"
+        ? ["y confirm   n/Enter cancel   Ctrl-C quit", "A backup is created before any managed block is changed."]
+        : [
+            `Enter accept${state.field === "repo" ? " current directory" : ""}   Tab autocomplete   Backspace edit`,
+            "Ctrl-C quit",
+            state.message || "The installer writes only a managed block and creates a backup first."
+        ];
+    const suggestionRows = state.suggestions.length > 0
+        ? state.suggestions.map((suggestion, index) => `${index === 0 ? ">" : " "} ${suggestion}`)
+        : ["No nearby package repos found. Type a path, or press Enter for current directory."];
+    clearTty();
+    output.write(color(asciiBanner("repo"), TTY_COLORS.cyan));
+    output.write("\n");
+    output.write(`${color("repo-zsh-helper setup", TTY_COLORS.bold)}  ${TTY_COLORS.dim}step${TTY_COLORS.reset} ${color(`${state.step}/${state.totalSteps}`, TTY_COLORS.pink)}  ${TTY_COLORS.dim}version${TTY_COLORS.reset} ${color(VERSION, TTY_COLORS.orange)}\n`);
+    output.write(colorBox("plan", [
+        `action: ${action}`,
+        `repo: ${repo}`,
+        `keyword: ${keyword}`,
+        `target: ${state.args.zshrc || "~/.zshrc"}`
+    ], TTY_COLORS.cyan));
+    output.write("\n");
+    if (state.field === "repo") {
+        output.write(colorBox("repo suggestions", suggestionRows, TTY_COLORS.purple));
+        output.write("\n");
+    }
+    output.write(colorBox(promptLabel, [inputPreview], state.field === "confirm" ? TTY_COLORS.orange : TTY_COLORS.green));
+    output.write("\n");
+    output.write(colorBox("keys", keyRows, TTY_COLORS.slate));
+}
+async function ttyPromptField(state) {
+    input.setRawMode(true);
+    input.resume();
+    renderWizard(state);
+    return new Promise((resolve) => {
+        const onData = (buffer) => {
+            const values = [...buffer.toString("utf8")];
+            for (const value of values) {
+                if (value === "\u0003") {
+                    cleanup();
+                    output.write("\n");
+                    resolve(undefined);
+                    return;
+                }
+                if (state.field === "confirm") {
+                    if (/^y$/i.test(value)) {
+                        cleanup();
+                        resolve("yes");
+                        return;
+                    }
+                    if (value === "\r" || /^n$/i.test(value) || value === "\x1b") {
+                        cleanup();
+                        resolve("no");
+                        return;
+                    }
+                }
+                else if (value === "\r") {
+                    cleanup();
+                    resolve(state.field === "repo" && !state.value.trim() ? "." : state.value.trim());
+                    return;
+                }
+                else if (value === "\t" && state.field === "repo") {
+                    const [matches] = directoryPathCompleter(state.value);
+                    if (matches.length > 0) {
+                        state.value = matches[0];
+                        state.message = `Completed to ${matches[0]}`;
+                    }
+                    else {
+                        state.message = "No path completions found.";
+                    }
+                }
+                else if (value === "\x7f" || value === "\b") {
+                    state.value = state.value.slice(0, -1);
+                    state.message = "";
+                }
+                else if (/^[ -~]$/.test(value)) {
+                    state.value += value;
+                    state.message = "";
+                }
+            }
+            renderWizard(state);
+        };
+        const cleanup = () => {
+            input.off("data", onData);
+            input.setRawMode(false);
+            input.pause();
+            clearTty();
+        };
+        input.on("data", onData);
+    });
+}
+async function promptIfMissingTty(args) {
+    const fields = [];
+    if (!args.remove && !args.repo)
+        fields.push("repo");
+    if (!args.keyword)
+        fields.push("keyword");
+    if (!args.yes && !args.dryRun)
+        fields.push("confirm");
+    for (let i = 0; i < fields.length; i += 1) {
+        const field = fields[i];
+        const suggestions = field === "repo" ? repoPathSuggestions() : [];
+        const result = await ttyPromptField({
+            args,
+            field,
+            step: i + 1,
+            totalSteps: fields.length,
+            value: "",
+            suggestions,
+            message: field === "repo" ? "Press Enter for current directory, or Tab for path completion." : ""
+        });
+        if (result === undefined) {
+            args.confirmed = false;
+            return args;
+        }
+        if (field === "repo")
+            args.repo = result || ".";
+        else if (field === "keyword")
+            args.keyword = result;
+        else
+            args.confirmed = result === "yes";
+    }
+    return args;
+}
 async function promptIfMissing(args) {
+    if (ttyEnabled())
+        return promptIfMissingTty(args);
     const rl = readline.createInterface({ input, output, completer: directoryPathCompleter });
     try {
         if (!args.remove && !args.repo) {
