@@ -562,6 +562,7 @@ const TTY_COLORS = {
     red: "\x1b[38;2;255;92;92m",
     slate: "\x1b[38;2;137;148;171m"
 };
+const ACTION_CHOICES = ["update", "remove", "new"];
 function ttyEnabled() {
     return Boolean(input.isTTY && output.isTTY);
 }
@@ -648,6 +649,9 @@ function statusText(state) {
 function selectedLine(line, selected) {
     return selected ? bg(color(line, TTY_COLORS.bold), 27, 39, 63) : line;
 }
+function selectedAction(state) {
+    return ACTION_CHOICES.includes(state.value) ? state.value : "update";
+}
 function formatSetupRows(state, scripts, repoName, repoPath, action) {
     const width = ttyWidth() - 8;
     const leftWidth = Math.max(14, Math.floor(width * 0.24));
@@ -668,9 +672,10 @@ function formatSetupRows(state, scripts, repoName, repoPath, action) {
         });
     }
     else if (state.field === "action") {
-        add("update", state.existingBlocks[0]?.keyword || "existing helper", "enter", true, TTY_COLORS.green);
-        add("remove", state.existingBlocks[0]?.keyword || "existing helper", "press r", false, TTY_COLORS.red);
-        add("add new", repoName, "press n", false, TTY_COLORS.orange);
+        const choice = selectedAction(state);
+        add("update", state.existingBlocks[0]?.keyword || "existing helper", "enter/u", choice === "update", TTY_COLORS.green);
+        add("remove", state.existingBlocks[0]?.keyword || "existing helper", "press r", choice === "remove", TTY_COLORS.red);
+        add("add new", repoName, "press n", choice === "new", TTY_COLORS.orange);
     }
     else {
         add("repo", repoName, state.field === "keyword" ? "ready" : "selected", false, TTY_COLORS.green);
@@ -702,15 +707,21 @@ function renderWizard(state) {
             : state.field === "keyword"
                 ? "Shell keyword"
                 : `${state.args.remove ? "Remove from" : state.args.action === "update" ? "Update in" : "Install into"} ~/.zshrc?`;
+    const actionSelection = selectedAction(state);
+    const selectedActionText = actionSelection === "update"
+        ? `Update ${state.existingBlocks[0]?.keyword || "existing helper"}`
+        : actionSelection === "remove"
+            ? `Remove ${state.existingBlocks[0]?.keyword || "existing helper"}`
+            : "Add a new helper";
     const inputPreview = state.field === "confirm"
         ? "Press Enter to apply, or n to cancel"
         : state.field === "action"
-            ? `Enter update ${state.existingBlocks[0]?.keyword || "existing"}   r remove   n add new   q quit`
+            ? `${selectedActionText}   ${color("█", TTY_COLORS.green)}`
             : `${state.field === "repo" && !state.value ? "." : state.value}${color("█", TTY_COLORS.green)}`;
     const keyRows = state.field === "confirm"
         ? ["Enter apply   n cancel   Ctrl-C quit", "A backup is created before any managed block is changed."]
         : state.field === "action"
-            ? ["Enter update   r remove   n new helper   q/Ctrl-C quit", state.message || "Choose the smallest change for this repo."]
+            ? ["↑↓ choose   Enter apply   u update   r remove   n new   q/Ctrl-C quit", state.message || "Choose the smallest change for this repo."]
             : [
                 `Enter accept${state.field === "repo" ? " current directory" : ""}   Tab autocomplete   Backspace edit`,
                 "Ctrl-C quit",
@@ -721,7 +732,7 @@ function renderWizard(state) {
         : ["No nearby package repos found. Type a path, or press Enter for current directory."];
     const fullWidth = ttyWidth() - 2;
     const defaultAction = state.field === "action"
-        ? `Enter ${color("update", TTY_COLORS.green)}`
+        ? `Enter ${color(actionSelection, TTY_COLORS.green)}`
         : state.field === "confirm"
             ? `Enter ${color("apply", TTY_COLORS.green)}`
             : `Enter ${color("accept", TTY_COLORS.green)}`;
@@ -767,16 +778,37 @@ async function ttyPromptField(state) {
     renderWizard(state);
     return new Promise((resolve) => {
         const onData = (buffer) => {
-            const values = [...buffer.toString("utf8")];
-            for (const value of values) {
-                if (value === "\u0003") {
-                    cleanup();
-                    output.write("\n");
-                    resolve(undefined);
-                    return;
-                }
+            const data = buffer.toString("utf8");
+            if (data === "\u0003") {
+                cleanup();
+                output.write("\n");
+                resolve(undefined);
+                return;
+            }
+            if (data === "\x1b[A" || data === "\x1b[D" || data === "\x1b[B" || data === "\x1b[C") {
                 if (state.field === "action") {
-                    if (/^u$/i.test(value) || value === "\r") {
+                    const current = ACTION_CHOICES.indexOf(selectedAction(state));
+                    const delta = data === "\x1b[A" || data === "\x1b[D" ? -1 : 1;
+                    const next = (current + delta + ACTION_CHOICES.length) % ACTION_CHOICES.length;
+                    state.value = ACTION_CHOICES[next];
+                    state.message = `Selected ${state.value}. Press Enter to apply.`;
+                }
+                renderWizard(state);
+                return;
+            }
+            if (data.startsWith("\x1b[") || data.startsWith("\x1bO")) {
+                renderWizard(state);
+                return;
+            }
+            const values = [...data];
+            for (const value of values) {
+                if (state.field === "action") {
+                    if (value === "\r") {
+                        cleanup();
+                        resolve(selectedAction(state));
+                        return;
+                    }
+                    if (/^u$/i.test(value)) {
                         cleanup();
                         resolve("update");
                         return;

@@ -643,6 +643,9 @@ const TTY_COLORS = {
 };
 
 type WizardField = "repo" | "action" | "keyword" | "confirm";
+type ActionChoice = "update" | "remove" | "new";
+
+const ACTION_CHOICES: ActionChoice[] = ["update", "remove", "new"];
 
 type WizardState = {
   args: CliArgs;
@@ -752,6 +755,10 @@ function selectedLine(line: string, selected: boolean): string {
   return selected ? bg(color(line, TTY_COLORS.bold), 27, 39, 63) : line;
 }
 
+function selectedAction(state: WizardState): ActionChoice {
+  return ACTION_CHOICES.includes(state.value as ActionChoice) ? state.value as ActionChoice : "update";
+}
+
 function formatSetupRows(state: WizardState, scripts: string[], repoName: string, repoPath: string, action: string): string {
   const width = ttyWidth() - 8;
   const leftWidth = Math.max(14, Math.floor(width * 0.24));
@@ -773,9 +780,10 @@ function formatSetupRows(state: WizardState, scripts: string[], repoName: string
       add(index === 0 ? "current" : `suggestion ${index + 1}`, suggestion, index === 0 ? "enter" : "tab/edit", index === 0, TTY_COLORS.green);
     });
   } else if (state.field === "action") {
-    add("update", state.existingBlocks[0]?.keyword || "existing helper", "enter", true, TTY_COLORS.green);
-    add("remove", state.existingBlocks[0]?.keyword || "existing helper", "press r", false, TTY_COLORS.red);
-    add("add new", repoName, "press n", false, TTY_COLORS.orange);
+    const choice = selectedAction(state);
+    add("update", state.existingBlocks[0]?.keyword || "existing helper", "enter/u", choice === "update", TTY_COLORS.green);
+    add("remove", state.existingBlocks[0]?.keyword || "existing helper", "press r", choice === "remove", TTY_COLORS.red);
+    add("add new", repoName, "press n", choice === "new", TTY_COLORS.orange);
   } else {
     add("repo", repoName, state.field === "keyword" ? "ready" : "selected", false, TTY_COLORS.green);
     add("path", repoPath, "target", false, TTY_COLORS.slate);
@@ -808,15 +816,21 @@ function renderWizard(state: WizardState): void {
     : state.field === "keyword"
       ? "Shell keyword"
       : `${state.args.remove ? "Remove from" : state.args.action === "update" ? "Update in" : "Install into"} ~/.zshrc?`;
+  const actionSelection = selectedAction(state);
+  const selectedActionText = actionSelection === "update"
+    ? `Update ${state.existingBlocks[0]?.keyword || "existing helper"}`
+    : actionSelection === "remove"
+      ? `Remove ${state.existingBlocks[0]?.keyword || "existing helper"}`
+      : "Add a new helper";
   const inputPreview = state.field === "confirm"
     ? "Press Enter to apply, or n to cancel"
     : state.field === "action"
-      ? `Enter update ${state.existingBlocks[0]?.keyword || "existing"}   r remove   n add new   q quit`
+      ? `${selectedActionText}   ${color("█", TTY_COLORS.green)}`
     : `${state.field === "repo" && !state.value ? "." : state.value}${color("█", TTY_COLORS.green)}`;
   const keyRows = state.field === "confirm"
     ? ["Enter apply   n cancel   Ctrl-C quit", "A backup is created before any managed block is changed."]
     : state.field === "action"
-      ? ["Enter update   r remove   n new helper   q/Ctrl-C quit", state.message || "Choose the smallest change for this repo."]
+      ? ["↑↓ choose   Enter apply   u update   r remove   n new   q/Ctrl-C quit", state.message || "Choose the smallest change for this repo."]
     : [
         `Enter accept${state.field === "repo" ? " current directory" : ""}   Tab autocomplete   Backspace edit`,
         "Ctrl-C quit",
@@ -827,7 +841,7 @@ function renderWizard(state: WizardState): void {
     : ["No nearby package repos found. Type a path, or press Enter for current directory."];
   const fullWidth = ttyWidth() - 2;
   const defaultAction = state.field === "action"
-    ? `Enter ${color("update", TTY_COLORS.green)}`
+    ? `Enter ${color(actionSelection, TTY_COLORS.green)}`
     : state.field === "confirm"
       ? `Enter ${color("apply", TTY_COLORS.green)}`
       : `Enter ${color("accept", TTY_COLORS.green)}`;
@@ -881,18 +895,42 @@ async function ttyPromptField(state: WizardState): Promise<string | undefined> {
 
   return new Promise((resolve) => {
     const onData = (buffer: Buffer) => {
-      const values = [...buffer.toString("utf8")];
+      const data = buffer.toString("utf8");
 
-      for (const value of values) {
-      if (value === "\u0003") {
+      if (data === "\u0003") {
         cleanup();
         output.write("\n");
         resolve(undefined);
         return;
       }
 
+      if (data === "\x1b[A" || data === "\x1b[D" || data === "\x1b[B" || data === "\x1b[C") {
         if (state.field === "action") {
-          if (/^u$/i.test(value) || value === "\r") {
+          const current = ACTION_CHOICES.indexOf(selectedAction(state));
+          const delta = data === "\x1b[A" || data === "\x1b[D" ? -1 : 1;
+          const next = (current + delta + ACTION_CHOICES.length) % ACTION_CHOICES.length;
+          state.value = ACTION_CHOICES[next];
+          state.message = `Selected ${state.value}. Press Enter to apply.`;
+        }
+        renderWizard(state);
+        return;
+      }
+
+      if (data.startsWith("\x1b[") || data.startsWith("\x1bO")) {
+        renderWizard(state);
+        return;
+      }
+
+      const values = [...data];
+
+      for (const value of values) {
+        if (state.field === "action") {
+          if (value === "\r") {
+            cleanup();
+            resolve(selectedAction(state));
+            return;
+          }
+          if (/^u$/i.test(value)) {
             cleanup();
             resolve("update");
             return;
